@@ -1,9 +1,9 @@
-"""Simulator state used by Jev decisions and replay verification."""
+"""Simulator state used by PD control recordings and replay verification."""
 
 READ_STATE = """() => {
     const deg = 180 / Math.PI;
     return {
-        frame: window.__jevFrame || 0,
+        frame: window.__dockingFrame || 0,
         game_over: isGameOver,
         fail_message: document.querySelector('#fail-message')?.textContent.trim() || '',
         range_m: camera.position.distanceTo(issObject.position),

@@ -1,33 +1,52 @@
-# Jev-Guided ISS Docking
+# ISS Docking with PD Control
 
-Jev guides a spacecraft through the [SpaceX ISS Docking Simulator](https://iss-sim.spacex.com/). It chooses flight phases and when to brake; a controller handles individual thruster pulses. The simulator pauses while Jev makes each decision.
+A PD controller that automatically docks in the [SpaceX ISS Docking Simulator](https://iss-sim.spacex.com/).
 
-## Demo
+https://github.com/user-attachments/assets/2750ff73-fa76-40d2-a8af-d93bf3d79b5d
 
-https://github.com/user-attachments/assets/0dd30c47-2f6e-4baf-9e31-fd96615b9105
+Default 200 m approach, shown at **1.5× speed**.
 
-This is a replay of a successful docking from the simulator's normal start. It shows 156 Jev phase decisions and nine braking judgments. [Download the MP4](demo/docking.mp4) · [View the recording](demo/recording.json)
+## How it works
 
-## Results
+The controller corrects position and orientation every simulation frame:
 
-- **10/10 full dockings** from randomized starts 135–224 m away.
-- **20/20 final approaches** from aligned starts 6–10 m away.
+- **Proportional (P):** pushes the craft toward the docking position and orientation.
+- **Derivative (D):** damps linear and angular motion to reduce overshoot.
 
-Jev made the high-level choices; the controller stabilized the craft and a safety guard checked braking. These are small simulator trials. The full-distance controller brings different starts to similar final-approach states.
+A distance-based speed limit slows the approach near the port. An alignment check brakes forward motion while the craft is off-center or poorly oriented.
 
-In separate control-limit trials, Jev chose braking as a phase and docked on 3/3 starts, but missed the arrival deadline each time. Jev-chosen three-axis velocity targets docked on 0/3 trials with different prompts on the same start. [Control-limit results](demo/jev-control-results.json)
+Python and **Playwright** launch Chromium, load the simulator, set starting conditions, and record results. The **JavaScript** controller runs inside the page and uses the simulator's own thruster controls and physics. Three.js and GSAP come from the simulator; FFmpeg is optional for exporting videos.
 
-[Full-docking results](demo/full-distance-results.json) · [Braking results](demo/braking-results.json) · [Technical reference](REFERENCE.md)
+## Run
 
-## Run it
+Requires Python 3.10+.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m playwright install chromium
-.venv/bin/python -m scripts.replay --headed --fast-start
+.venv/bin/python -m scripts.dock --headed
 ```
 
-Replay needs no API key. To make new Jev decisions, set `JEV_API_KEY` in `.env` or the environment, then run `.venv/bin/python -m scripts.dock`. Add `--seed N` for a repeatable randomized start.
+The default start is fixed. Add `--seed 42` for a repeatable random start, or `--near --seed 42` for a start near the port. Change the seed to try another starting state.
 
-This independent experiment uses a third-party browser simulator, not spacecraft flight software.
+## Random starts and validation
+
+The controller docked successfully from **94 distinct starting positions**:
+
+- **53 full-distance starts:** 120–250 m along the approach axis, with varied lateral offsets and orientations.
+- **41 near-port starts:** 6–10 m along the approach axis, with small position and orientation errors.
+- **20 of the full-distance starts** also include initial linear and angular motion.
+
+The suite contains two fixed starts and 92 seeded starts. Each pass must meet the simulator's docking tolerances and time/frame budgets. Separate checks cover recovery from disturbances, timeouts, and exact action replay.
+
+```bash
+.venv/bin/python -m scripts.evaluate --suite all
+.venv/bin/python -m scripts.check_controller
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/python -m scripts.replay --fast --fast-start
+```
+
+[Validation results](demo/pd-results.json) · [Recorded actions](demo/pd-recording.json) · [Control details](REFERENCE.md)
+
+An independent browser-simulator experiment.

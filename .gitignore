@@ -1,8 +1,13 @@
 .env
+.env.*
+.DS_Store
 .venv/
-.archive/
 results/
 __pycache__/
 *.pyc
 AGENTS.md
 CLAUDE.md
+
+# Generated media is hosted as a GitHub issue attachment.
+demo/*.mp4
+demo/*.gif

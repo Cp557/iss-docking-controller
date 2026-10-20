@@ -16,6 +16,12 @@ class Scenario:
     roll_deg: float
     pitch_deg: float
     yaw_deg: float
+    approach_velocity: float = 0.0
+    lateral_y_velocity: float = 0.0
+    lateral_z_velocity: float = 0.0
+    roll_rate: float = 0.0
+    pitch_rate: float = 0.0
+    yaw_rate: float = 0.0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -75,11 +81,11 @@ def random_near_docking_scenario(seed: int) -> Scenario:
 
 
 def apply_scenario(
-    page: Page, scenario: Scenario, arm_pd: bool = False, arm_jev: bool = False
+    page: Page, scenario: Scenario, arm_pd: bool = False
 ) -> None:
     """Atomically reset a scenario and optionally arm an in-page controller."""
     page.evaluate(
-        """({scenario, armPd, armJev}) => {
+        """({scenario, armPd}) => {
             const toRad = Math.PI / 180;
 
             camera.position.set(
@@ -95,10 +101,11 @@ def apply_scenario(
             );
             camera.updateMatrixWorld(true);
 
-            motionVector.set(0, 0, 0);
-            currentRotationX = 0;
-            currentRotationY = 0;
-            currentRotationZ = 0;
+            motionVector.set(scenario.lateral_y_velocity, scenario.lateral_z_velocity,
+                scenario.approach_velocity);
+            currentRotationX = scenario.pitch_rate * toRad;
+            currentRotationY = scenario.yaw_rate * toRad;
+            currentRotationZ = scenario.roll_rate * toRad;
             targetRotationX = 0;
             targetRotationY = 0;
             targetRotationZ = 0;
@@ -113,18 +120,10 @@ def apply_scenario(
             prevRangeTime = Date.now();
 
             if (armPd) {
-                window.__pdStats.scenario = scenario;
-                window.__pdControllerArmed = true;
+                window.__pdController.scenario = scenario;
+                window.__pdController.armed = true;
             }
-            if (armJev) {
-                window.__jevServo.scenario = scenario;
-                window.__jevServoArmed = true;
-            }
+            window.__dockingFrame = 0;
         }""",
-        {"scenario": scenario.as_dict(), "armPd": arm_pd, "armJev": arm_jev},
+        {"scenario": scenario.as_dict(), "armPd": arm_pd},
     )
-
-
-def apply_scenario_and_arm(page: Page, scenario: Scenario) -> None:
-    """Reset a scenario and release the installed PD controller."""
-    apply_scenario(page, scenario, arm_pd=True)

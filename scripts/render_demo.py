@@ -1,66 +1,26 @@
-"""Render a short, labeled video from a recorded Jev docking run."""
+"""Render a video from a recorded docking run."""
 
 import argparse
 import json
 import math
 import subprocess
-import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 from scripts.replay import INSTALL_REPLAY, max_capture_difference
 from src.telemetry.state import READ_STATE
-from src.browser.simulator import begin_episode_fast, open_simulator
+from src.browser.simulator import begin_episode_fast, open_simulator, pause_simulation
 from src.evaluation.scenarios import Scenario, apply_scenario
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TRACE = ROOT / "demo/recording.json"
+DEFAULT_TRACE = ROOT / "demo/pd-recording.json"
 DEFAULT_OUTPUT = ROOT / "demo"
 START_FRAME = 0
 PREVIEW_FRAMES = (START_FRAME, 180, 530, 1590, 2300, 2400, 3000, 3300)
 SUCCESS_TRANSITION_MS = 4000
 SUCCESS_FRAME_INTERVAL_MS = 250
-OVERLAY = """() => {
-    const style = document.createElement('style');
-    style.textContent = `
-        #dockingDemo { position: fixed; inset: 0; z-index: 2147483647;
-            pointer-events: none; color: #f6fbff; font-family: Arial, sans-serif; }
-        #dockingDemo .card { position: absolute; top: 24px; left: 24px;
-            width: 300px; padding: 12px 14px; border: 1px solid #72e1ff66;
-            border-radius: 10px; background: #07131edc;
-            box-shadow: 0 14px 45px #0009; }
-        #dockingDemo .title { margin: 0 0 10px; font-size: 18px;
-            font-weight: 800; line-height: 1; }
-        #dockingDemo .title span { margin-left: 8px; color: #75dfff;
-            font-size: 9px; font-weight: 700; letter-spacing: 1px; }
-        #dockingDemo .stats { display: flex; gap: 16px; }
-        #dockingDemo .label { color: #a7bdca; font-size: 9px;
-            letter-spacing: 1px; text-transform: uppercase; }
-        #dockingDemo .value { margin-top: 2px; font-size: 14px; font-weight: 700; }
-        #dockingDemo .phase { color: #75eec7; }
-        #dockingDemo .brake { margin-top: 8px; padding-top: 7px;
-            border-top: 1px solid #75dfff33; color: #a7bdca; font-size: 9px;
-            letter-spacing: .7px; }
-        #dockingDemo .brake strong { margin-left: 6px; color: #75eec7; }
-    `;
-    document.head.appendChild(style);
-    const overlay = document.createElement('div');
-    overlay.id = 'dockingDemo';
-    overlay.innerHTML = `
-        <div class="card">
-            <div class="title">ISS Docking<span>JEV GUIDANCE</span></div>
-            <div class="stats">
-                <div><div class="label">Jev phase</div><div class="value phase" id="demoPhase">ALIGN</div></div>
-                <div><div class="label">Range</div><div class="value" id="demoRange">—</div></div>
-                <div><div class="label">Decision</div><div class="value" id="demoDecision">1</div></div>
-            </div>
-            <div class="brake" id="demoBrakeRow">BRAKING<strong id="demoBrake">PENDING</strong></div>
-        </div>
-    `;
-    document.body.appendChild(overlay);
-}"""
 DRAW_ON_DEMAND = """() => {
     const drawScene = renderer.render.bind(renderer);
     const drawNavball = navballRenderer.render.bind(navballRenderer);
@@ -77,49 +37,22 @@ DRAW_ON_DEMAND = """() => {
 
 def advance_to_frame(page, target: int) -> int:
     while True:
-        frame = page.evaluate("window.__jevFrame")
+        snapshot = page.evaluate("""() => ({
+            frame: window.__dockingFrame, ended: window.__replayResult !== null,
+        })""")
+        frame = snapshot["frame"]
         if frame >= target:
             return frame
+        if snapshot["ended"]:
+            raise ValueError(f"Replay ended at frame {frame}, before requested frame {target}")
         remaining = target - frame
         page.clock.run_for(1000 if remaining > 65 else (100 if remaining > 7 else 17))
 
 
-def update_overlay(page, frame: int, decisions: list[dict]) -> None:
-    latest = next(
-        (index for index in range(len(decisions) - 1, -1, -1)
-         if decisions[index]["frame"] <= frame),
-        0,
-    )
-    braking_choices = [
-        decision["braking"]["choice"] for decision in decisions
-        if decision["frame"] <= frame and "braking" in decision
-    ]
-    braking_status = (
-        "DOCKING SPEED" if braking_choices[-1] != "continue_slow" else "KEEP CLOSING"
-    ) if braking_choices else "PENDING"
-    state = page.evaluate(READ_STATE)
-    page.evaluate(
-        """data => {
-            document.querySelector('#demoPhase').textContent = data.phase;
-            document.querySelector('#demoRange').textContent = data.range;
-            document.querySelector('#demoDecision').textContent = data.decision;
-            document.querySelector('#demoBrake').textContent = data.braking;
-            document.querySelector('#demoBrakeRow').style.display = data.showBraking ? '' : 'none';
-        }""",
-        {
-            "phase": decisions[latest]["applied_phase"].upper(),
-            "range": f"{state['range_m']:.1f} m",
-            "decision": str(latest + 1),
-            "braking": braking_status,
-            "showBraking": bool(braking_choices),
-        },
-    )
-
-
 def render(trace_path: Path, output: Path, preview: bool, fps: int, stride: int) -> None:
     data = json.loads(trace_path.read_text())
-    if data["outcome"] != "SUCCESS" or not data.get("result"):
-        raise ValueError("Demo requires a recorded successful docking")
+    if data.get("controller") != "pd" or data["outcome"] != "SUCCESS" or not data.get("result"):
+        raise ValueError("Demo requires a recorded successful PD docking")
     output.mkdir(parents=True, exist_ok=True)
     target_frame = data["final"]["frame"]
     final_visual_frame = target_frame - 1
@@ -139,16 +72,15 @@ def render(trace_path: Path, output: Path, preview: bool, fps: int, stride: int)
             page.clock.install()
             open_simulator(page)
             begin_episode_fast(page)
-            page.clock.pause_at(time.time() + 10)
+            pause_simulation(page)
+            page.evaluate(f"window.__readDockingState = ({READ_STATE})")
             page.evaluate(INSTALL_REPLAY, events)
             apply_scenario(page, Scenario(**data["scenario"]))
             page.evaluate(DRAW_ON_DEMAND)
-            page.evaluate(OVERLAY)
-            page.evaluate("window.__jevFrame = 0; window.__replayArmed = true")
+            page.evaluate("window.__dockingFrame = 0; window.__replayArmed = true")
 
             for index, target in enumerate(targets):
                 frame = advance_to_frame(page, target)
-                update_overlay(page, frame, data["decisions"])
                 page.evaluate("window.__demoDrawFrame()")
                 name = f"preview_{frame:04d}.png" if preview else f"frame_{index:04d}.png"
                 page.screenshot(path=str(output / name))
@@ -166,7 +98,6 @@ def render(trace_path: Path, output: Path, preview: bool, fps: int, stride: int)
                 raise ValueError(f"Demo replay diverged from recorded success: {difference}")
             print(f"replay_match=True max_capture_difference={difference:.6f}", flush=True)
 
-            page.evaluate("document.querySelector('#dockingDemo').remove()")
             transition_steps = range(0, SUCCESS_TRANSITION_MS + 1,
                                      SUCCESS_FRAME_INTERVAL_MS)
             for index, elapsed_ms in enumerate(transition_steps):
@@ -207,6 +138,8 @@ def main() -> None:
     parser.add_argument("--fps", type=int, default=10)
     parser.add_argument("--stride", type=int, default=14)
     args = parser.parse_args()
+    if args.fps <= 0 or args.stride <= 0:
+        parser.error("fps and stride must be positive")
     render(args.trace, args.output, args.preview, args.fps, args.stride)
 
 

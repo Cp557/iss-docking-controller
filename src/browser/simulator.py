@@ -6,10 +6,16 @@ SIMULATOR_URL = "https://iss-sim.spacex.com/"
 
 BEGIN_BUTTON_DELAY_MS = 2000
 WARP_TRANSITION_TIMEOUT_MS = 120000
+CLOCK_PAUSE_MARGIN_SECONDS = 60
 
 
 def open_simulator(page: Page) -> None:
     page.goto(SIMULATOR_URL)
+
+
+def pause_simulation(page: Page) -> None:
+    """Pause before arming, leaving room for dispatch delay under browser load."""
+    page.clock.pause_at(page.evaluate("Date.now()") / 1000 + CLOCK_PAUSE_MARGIN_SECONDS)
 
 
 def begin_episode(page: Page) -> None:
@@ -23,6 +29,8 @@ def begin_episode(page: Page) -> None:
 
 def begin_episode_fast(page: Page) -> None:
     """Complete the simulator's cosmetic warp using its own animation endpoints."""
+    page.wait_for_function("() => typeof introAnimationIn !== 'undefined' && introAnimationIn")
+    page.evaluate("introAnimationIn.progress(1)")
     begin_button = page.get_by_text("BEGIN", exact=True)
     begin_button.wait_for()
     begin_button.click()
@@ -43,6 +51,19 @@ def disable_gpu_rendering(page: Page) -> None:
     page.evaluate(
         """() => {
             renderer.render = () => {};
+            renderer.compile = () => {};
             navballRenderer.render = () => {};
+            tooltipRenderer.render = () => {};
+            // Thruster tip and worm animations only affect HUD elements.
+            const originalFromTo = gsap.fromTo;
+            gsap.fromTo = function(target, ...args) {
+                if (typeof target === 'string' && target.startsWith('#tip-')) return;
+                return originalFromTo.call(this, target, ...args);
+            };
+            const originalTo = gsap.to;
+            gsap.to = function(target, ...args) {
+                if (typeof target === 'string' && target.startsWith('#worm-')) return;
+                return originalTo.call(this, target, ...args);
+            };
         }"""
     )
