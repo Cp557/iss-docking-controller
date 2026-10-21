@@ -1,4 +1,4 @@
-# ISS Docking with PD Control
+# ISS Docking Controller
 
 A PD controller that automatically docks in the [SpaceX ISS Docking Simulator](https://iss-sim.spacex.com/).
 
